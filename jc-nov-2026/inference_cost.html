@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<title>Inference Time Calculator</title>
+<style>
+:root{color-scheme:light only;--fg:#1d2433;--muted:#566070;--accent:#2e7d32;--warn:#c62828;--line:#d7dde6;--panel:#f5f7f9;}
+html,body{background:#ffffff;color:var(--fg);margin:0}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:18px;line-height:1.45;padding:24px 16px}
+main{max-width:1180px;margin:0 auto}
+h1{font-size:1.75rem;margin:0 0 .25rem;color:var(--accent)}
+h2{font-size:1.05rem;margin:0 0 .5rem}
+.lead{color:var(--muted);margin:0 0 1rem;max-width:85ch}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+label{display:block;font-weight:600;font-size:.95rem;margin:.8rem 0 .1rem}
+label:first-of-type{margin-top:0}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.val{font-weight:700;color:var(--accent)}
+.sub{font-size:.8rem;color:var(--muted);font-weight:400}
+.check{display:flex;align-items:center;gap:8px;margin-top:.9rem;font-size:.95rem}
+.check input{accent-color:var(--accent);width:18px;height:18px;margin:0}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card .t{font-size:.95rem;color:var(--muted)}
+.card .n{font-size:2rem;font-weight:800;line-height:1.2}
+.card.a .n{color:var(--accent)}.card.b .n{color:var(--warn)}
+.ratio{font-size:1.15rem;margin:14px 0 4px}
+.ratio b{font-size:1.5rem}
+.bars{margin-top:14px}
+.row{margin:10px 0}
+.row .lbl{font-size:.9rem;font-weight:600;margin-bottom:3px}
+.track{position:relative;height:28px;background:#fff;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px 0 0 5px}
+.axis{position:relative;height:36px;margin-top:2px}
+.tick{position:absolute;top:0;transform:translateX(-50%);font-size:.75rem;color:var(--muted);text-align:center;white-space:nowrap}
+.tick::before{content:"";display:block;width:1px;height:8px;background:#9aa3b2;margin:0 auto 2px}
+.notes{margin:14px 0 0;padding-left:1.2rem;font-size:.9rem;color:var(--muted)}
+.notes li{margin:.25rem 0}
+footer{margin-top:18px;color:var(--muted);font-size:.8rem}
+@media (max-width:860px){.layout{grid-template-columns:1fr}.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>How long would it take to segment an MRI study?</h1>
+<p class="lead">Vision Banana segments one 2D image at a time by generating a whole new image. Specialist models like nnU-Net are tiny in comparison. Move the sliders to see what that means for real imaging data.</p>
+<div class="layout">
+  <div class="panel">
+    <label for="sSl">Slices per MRI volume: <span class="val" id="vSl"></span></label><input id="sSl" type="range" min="10" max="400" value="120">
+    <label for="sVol">Number of volumes (patients): <span class="val" id="vVol"></span></label><input id="sVol" type="range" min="1" max="500" value="1">
+    <label for="sVB">Vision Banana, seconds per image: <span class="val" id="vVB"></span><br><span class="sub">rough estimate, not reported in the paper (about 10–30 s)</span></label><input id="sVB" type="range" min="5" max="60" value="20">
+    <label for="sNN">nnU-Net, milliseconds per slice: <span class="val" id="vNN"></span><br><span class="sub">rough estimate for a single GPU</span></label><input id="sNN" type="range" min="5" max="500" value="20">
+    <div class="check"><input type="checkbox" id="cbTTA" checked><label for="cbTTA" style="margin:0;font-weight:400">nnU-Net with test-time augmentation (8 mirrored passes)</label></div>
+  </div>
+  <div class="panel">
+    <div class="cards">
+      <div class="card a"><div class="t">nnU-Net (local GPU)</div><div class="n" id="tNN"></div></div>
+      <div class="card b"><div class="t">Vision Banana (Google's hardware)</div><div class="n" id="tVB"></div></div>
+    </div>
+    <div class="ratio" id="ratio"></div>
+    <div class="bars">
+      <div class="row"><div class="lbl">nnU-Net</div><div class="track"><div class="fill" id="bNN" style="background:#2e7d32"></div></div></div>
+      <div class="row"><div class="lbl">Vision Banana</div><div class="track"><div class="fill" id="bVB" style="background:#c62828"></div></div></div>
+      <div class="axis" id="axis"></div>
+      <div class="sub" style="text-align:center">logarithmic time scale</div>
+    </div>
+    <ul class="notes">
+      <li>Vision Banana is <b>2D only</b>: each slice is segmented independently, with no 3D consistency between slices.</li>
+      <li>It runs only via Google's cloud, so <b>patient data would have to leave the hospital</b>.</li>
+      <li>All times are illustrative estimates for discussion; the paper reports no inference times.</li>
+    </ul>
+  </div>
+</div>
+<footer>Illustration for Journal Club WS26 · Gabeur et al., "Image Generators are Generalist Vision Learners", arXiv:2604.20329</footer>
+</main>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const LO=Math.log10(0.1),HI=Math.log10(4e7);
+const TICKS=[[1,'1 s'],[60,'1 min'],[3600,'1 h'],[86400,'1 day'],[604800,'1 week'],[2629800,'1 month'],[31557600,'1 year']];
+function human(s){
+  if(s<1)return Math.round(s*1000)+' ms';
+  if(s<60)return s.toFixed(1)+' s';
+  if(s<3600){const t=Math.round(s);return Math.floor(t/60)+' min '+(t%60)+' s';}
+  if(s<86400){const t=Math.round(s/60);return Math.floor(t/60)+' h '+(t%60)+' min';}
+  const t=Math.round(s/3600),d=Math.floor(t/24),h=t%24;return d+(d===1?' day':' days')+(h?' '+h+' h':'');
+}
+function pos(t){return Math.max(0,Math.min(100,(Math.log10(Math.max(t,0.1))-LO)/(HI-LO)*100));}
+const axis=$('axis');
+TICKS.forEach(([t,l])=>{const d=document.createElement('div');d.className='tick';d.style.left=pos(t)+'%';d.textContent=l;axis.appendChild(d);});
+function update(){
+  const sl=+$('sSl').value,vol=+$('sVol').value,vb=+$('sVB').value,nn=+$('sNN').value,tta=$('cbTTA').checked;
+  $('vSl').textContent=sl;$('vVol').textContent=vol;$('vVB').textContent=vb+' s';$('vNN').textContent=nn+' ms';
+  const images=sl*vol;
+  const tNN=images*nn/1000*(tta?8:1),tVB=images*vb;
+  $('tNN').textContent=human(tNN);$('tVB').textContent=human(tVB);
+  const r=tVB/tNN;
+  $('ratio').innerHTML='Vision Banana is roughly <b>'+(r>=10?Math.round(r).toLocaleString('en'):r.toFixed(1))+'&times;</b> slower for '+images.toLocaleString('en')+' slices ('+vol+' volume'+(vol>1?'s':'')+').';
+  $('bNN').style.width=pos(tNN)+'%';$('bVB').style.width=pos(tVB)+'%';
+}
+['sSl','sVol','sVB','sNN'].forEach(id=>$(id).addEventListener('input',update));
+$('cbTTA').addEventListener('change',update);
+update();
+})();
+</script>
+</body>
+</html>

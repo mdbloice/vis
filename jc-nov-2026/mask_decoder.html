@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<title>Masks as Images</title>
+<style>
+:root{color-scheme:light only;--fg:#1d2433;--muted:#566070;--accent:#2e7d32;--line:#d7dde6;--panel:#f5f7f9;}
+html,body{background:#ffffff;color:var(--fg);margin:0}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:18px;line-height:1.45;padding:24px 16px}
+main{max-width:1180px;margin:0 auto}
+h1{font-size:1.75rem;margin:0 0 .25rem;color:var(--accent)}
+h2{font-size:1rem;margin:0 0 .45rem}
+.lead{color:var(--muted);margin:0 0 1rem;max-width:85ch}
+.prompt{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85rem;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:6px;padding:10px 12px;margin:0 0 1rem;overflow-wrap:anywhere}
+.panels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.panel p.cap{margin:.45rem 0 0;font-size:.85rem;color:var(--muted)}
+canvas{width:100%;height:auto;display:block;border-radius:6px;image-rendering:pixelated;cursor:crosshair;background:#fff;touch-action:none}
+.bottom{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:14px;margin-top:14px}
+.controls label{display:block;font-weight:600;font-size:.95rem;margin:.7rem 0 .1rem}
+.controls input[type=range]{width:100%;accent-color:var(--accent)}
+.val{font-weight:400;color:var(--muted)}
+.check{display:flex;align-items:center;gap:8px;margin-top:.9rem;font-size:.95rem}
+.check input{accent-color:var(--accent);width:18px;height:18px;margin:0}
+.big{font-size:1.6rem;font-weight:700;color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+td,th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left}
+tr.win td{background:#e3f1e4;font-weight:700}
+.sw{display:inline-block;width:18px;height:18px;border-radius:4px;border:1px solid rgba(0,0,0,.25);vertical-align:middle}
+.ok{color:#2e7d32;font-weight:700}.bad{color:#c62828;font-weight:700}
+.hint{color:var(--muted);font-size:.9rem}
+footer{margin-top:18px;color:var(--muted);font-size:.8rem}
+@media (max-width:820px){.panels,.bottom{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>A segmentation mask is just a picture</h1>
+<p class="lead">The model is asked to <b>paint</b> each class in an agreed colour. A simple rule turns the painted image back into labels: every pixel gets the class whose prompted colour is <b>closest</b>. Hover over any image to inspect a pixel, and use the sliders to make the model's painting less perfect.</p>
+<div class="prompt">Prompt: "Generate a semantic segmentation visualization image, using this color mapping: {"sky": &lt;0, 90, 255&gt;, "tree": &lt;0, 170, 0&gt;, "car": &lt;255, 0, 0&gt;, "road": &lt;128, 128, 128&gt;, "background": &lt;255, 220, 0&gt;}"</div>
+<div class="panels">
+  <div class="panel"><h2>1. Input photo</h2><canvas id="cPhoto" width="320" height="200"></canvas><p class="cap">A toy scene drawn for this demo.</p></div>
+  <div class="panel"><h2>2. Generated image (model output)</h2><canvas id="cGen" width="320" height="200"></canvas><p class="cap">The colours are never exact: noise, drift and soft edges.</p></div>
+  <div class="panel"><h2>3. Decoded labels</h2><canvas id="cDec" width="320" height="200"></canvas><p class="cap">Each pixel snapped to the nearest prompted colour.</p></div>
+</div>
+<div class="bottom">
+  <div class="panel controls">
+    <h2>Imperfections in the generated image</h2>
+    <label for="sNoise">Pixel noise <span class="val" id="vNoise"></span></label><input id="sNoise" type="range" min="0" max="120" value="20">
+    <label for="sDrift">Colour drift per class <span class="val" id="vDrift"></span></label><input id="sDrift" type="range" min="0" max="120" value="15">
+    <label for="sBlur">Soft boundaries <span class="val" id="vBlur"></span></label><input id="sBlur" type="range" min="0" max="4" value="1">
+    <div class="check"><input type="checkbox" id="cbErr"><label for="cbErr" style="margin:0;font-weight:400">Show wrongly decoded pixels in black</label></div>
+    <p style="margin:1.1rem 0 0">Pixels decoded correctly:</p><div class="big" id="acc"></div>
+  </div>
+  <div class="panel"><h2>Pixel inspector</h2><div id="info"></div></div>
+</div>
+<footer>Illustration for Journal Club WS26 · Gabeur et al., "Image Generators are Generalist Vision Learners", arXiv:2604.20329 · toy data, not model output</footer>
+</main>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const W=320,H=200;
+const CL=[
+  {name:"sky",rgb:[0,90,255]},
+  {name:"tree",rgb:[0,170,0]},
+  {name:"car",rgb:[255,0,0]},
+  {name:"road",rgb:[128,128,128]},
+  {name:"background",rgb:[255,220,0]}
+];
+function inC(x,y,cx,cy,r){const dx=x-cx,dy=y-cy;return dx*dx+dy*dy<=r*r;}
+function horizon(x){return 86+7*Math.sin(x/28)+4*Math.sin(x/9);}
+function isCar(x,y){return (x>=170&&x<=282&&y>=116&&y<=148)||(x>=196&&x<=256&&y>=96&&y<=118)||inC(x,y,196,149,11)||inC(x,y,258,149,11);}
+function isCrown(x,y){return inC(x,y,46,56,28)||inC(x,y,30,70,16)||inC(x,y,64,70,16);}
+function isTree(x,y){return isCrown(x,y)||(x>=41&&x<=51&&y>=70&&y<=134);}
+function label(x,y){
+  if(isCar(x,y))return 2;
+  if(isTree(x,y))return 1;
+  if(y>=134)return 3;
+  if(y<horizon(x))return 0;
+  return 4;
+}
+function hash(x,y,s){let h=(Math.imul(x,374761393)+Math.imul(y,668265263)+Math.imul(s,982451653))|0;h=Math.imul(h^(h>>>13),1274126177);h^=h>>>16;return (h>>>0)/4294967296;}
+function clamp(v){return v<0?0:v>255?255:v;}
+
+const gt=new Uint8Array(W*H);
+for(let y=0;y<H;y++)for(let x=0;x<W;x++)gt[y*W+x]=label(x+.5,y+.5);
+
+const photo=new ImageData(W,H);
+for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+  const i=y*W+x,l=gt[i],n=hash(x,y,1)*2-1,X=x+.5,Y=y+.5;let c;
+  if(l===0){const t=Y/90;c=[150+50*t,195+30*t,240];}
+  else if(l===1){
+    if(!isCrown(X,Y))c=[112,80,52];
+    else{const m=hash(Math.floor(x/3),Math.floor(y/3),7)*2-1;c=[52+18*m,104+26*m,46+10*m];}
+  }
+  else if(l===2){
+    c=[36,96,150];
+    if(X>=200&&X<=252&&Y>=100&&Y<=115&&Math.abs(X-226)>1.5)c=[172,206,226];
+    if(inC(X,Y,196,149,11)||inC(X,Y,258,149,11))c=(inC(X,Y,196,149,5)||inC(X,Y,258,149,5))?[160,160,165]:[28,28,32];
+    else if(Y>=128&&Y<=130)c=[24,64,104];
+  }
+  else if(l===3){c=[82,84,88];if(Math.abs(Y-168)<2&&Math.floor(X/28)%2===0)c=[236,236,228];}
+  else{const m=hash(Math.floor(x/2),Math.floor(y/2),3)*2-1;c=[120+16*m,152+16*m,84+10*m];}
+  const j=i*4;photo.data[j]=clamp(c[0]+8*n);photo.data[j+1]=clamp(c[1]+8*n);photo.data[j+2]=clamp(c[2]+8*n);photo.data[j+3]=255;
+}
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function gaussFactory(rng){let spare=null;return function(){if(spare!==null){const s=spare;spare=null;return s;}let u=0;while(u===0)u=rng();const v=rng();const r=Math.sqrt(-2*Math.log(u));spare=r*Math.sin(2*Math.PI*v);return r*Math.cos(2*Math.PI*v);};}
+function boxBlur(src){
+  const out=new Float32Array(src.length);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    let s0=0,s1=0,s2=0,n=0;
+    for(let dy=-1;dy<=1;dy++){const yy=y+dy;if(yy<0||yy>=H)continue;
+      for(let dx=-1;dx<=1;dx++){const xx=x+dx;if(xx<0||xx>=W)continue;const k=(yy*W+xx)*3;s0+=src[k];s1+=src[k+1];s2+=src[k+2];n++;}}
+    const k=(y*W+x)*3;out[k]=s0/n;out[k+1]=s1/n;out[k+2]=s2/n;
+  }
+  return out;
+}
+function nearest(r,g,b){let best=0,bd=Infinity;for(let c=0;c<CL.length;c++){const p=CL[c].rgb;const d=(r-p[0])**2+(g-p[1])**2+(b-p[2])**2;if(d<bd){bd=d;best=c;}}return best;}
+
+const cP=$('cPhoto'),cG=$('cGen'),cD=$('cDec');
+const ctxP=cP.getContext('2d'),ctxG=cG.getContext('2d'),ctxD=cD.getContext('2d');
+const gen=new Uint8ClampedArray(W*H*3),dec=new Uint8Array(W*H),genImg=new ImageData(W,H),decImg=new ImageData(W,H);
+let hover={x:220,y:130};
+
+function compute(){
+  const noise=+$('sNoise').value,drift=+$('sDrift').value,blur=+$('sBlur').value;
+  $('vNoise').textContent='(σ = '+noise+')';$('vDrift').textContent='(σ = '+drift+')';$('vBlur').textContent=blur===0?'(none)':'('+blur+' px)';
+  const g=gaussFactory(mulberry32(42));
+  const off=CL.map(()=>[g()*drift,g()*drift,g()*drift]);
+  let buf=new Float32Array(W*H*3);
+  for(let i=0;i<W*H;i++){const p=CL[gt[i]].rgb,o=off[gt[i]];for(let k=0;k<3;k++)buf[i*3+k]=p[k]+o[k];}
+  for(let b=0;b<blur;b++)buf=boxBlur(buf);
+  const showErr=$('cbErr').checked;let correct=0;
+  for(let i=0;i<W*H;i++){
+    for(let k=0;k<3;k++)gen[i*3+k]=clamp(buf[i*3+k]+g()*noise);
+    const j=i*4;genImg.data[j]=gen[i*3];genImg.data[j+1]=gen[i*3+1];genImg.data[j+2]=gen[i*3+2];genImg.data[j+3]=255;
+    const d=nearest(gen[i*3],gen[i*3+1],gen[i*3+2]);dec[i]=d;
+    if(d===gt[i])correct++;
+    const p=(showErr&&d!==gt[i])?[0,0,0]:CL[d].rgb;
+    decImg.data[j]=p[0];decImg.data[j+1]=p[1];decImg.data[j+2]=p[2];decImg.data[j+3]=255;
+  }
+  $('acc').textContent=(100*correct/(W*H)).toFixed(2)+' %';
+  draw();updateInfo();
+}
+function mark(ctx){
+  if(!hover)return;ctx.save();
+  ctx.lineWidth=2;ctx.strokeStyle='#000';ctx.strokeRect(hover.x-4.5,hover.y-4.5,10,10);
+  ctx.lineWidth=1;ctx.strokeStyle='#fff';ctx.strokeRect(hover.x-6.5,hover.y-6.5,14,14);
+  ctx.restore();
+}
+function draw(){ctxP.putImageData(photo,0,0);ctxG.putImageData(genImg,0,0);ctxD.putImageData(decImg,0,0);mark(ctxP);mark(ctxG);mark(ctxD);}
+function rgbStr(c){return 'rgb('+c[0]+','+c[1]+','+c[2]+')';}
+function updateInfo(){
+  const info=$('info');
+  if(!hover){info.innerHTML='<span class="hint">Hover over an image to inspect a pixel.</span>';return;}
+  const i=hover.y*W+hover.x,px=[gen[i*3],gen[i*3+1],gen[i*3+2]];
+  const rows=CL.map((c,k)=>({k,c,d:Math.sqrt((px[0]-c.rgb[0])**2+(px[1]-c.rgb[1])**2+(px[2]-c.rgb[2])**2)})).sort((a,b)=>a.d-b.d);
+  const win=rows[0].k,truth=gt[i],ok=win===truth;
+  let h='<p style="margin:0 0 .6rem">Generated pixel <span class="sw" style="background:'+rgbStr(px)+'"></span> <b>&lt;'+px.join(', ')+'&gt;</b> &rarr; decoded as <b>'+CL[win].name+'</b> &nbsp;<span class="'+(ok?'ok':'bad')+'">'+(ok?'&#10003; correct':'&#10007; wrong (true: '+CL[truth].name+')')+'</span></p>';
+  h+='<table><tr><th>Class</th><th>Prompted colour</th><th>Colour distance</th></tr>';
+  for(const r of rows)h+='<tr class="'+(r.k===win?'win':'')+'"><td>'+r.c.name+'</td><td><span class="sw" style="background:'+rgbStr(r.c.rgb)+'"></span> &lt;'+r.c.rgb.join(', ')+'&gt;</td><td>'+r.d.toFixed(1)+'</td></tr>';
+  info.innerHTML=h+'</table>';
+}
+function onMove(e){
+  const r=e.currentTarget.getBoundingClientRect();
+  const x=Math.floor((e.clientX-r.left)/r.width*W),y=Math.floor((e.clientY-r.top)/r.height*H);
+  if(x<0||y<0||x>=W||y>=H)return;hover={x,y};draw();updateInfo();
+}
+for(const c of [cP,cG,cD]){c.addEventListener('pointermove',onMove);c.addEventListener('pointerdown',onMove);}
+['sNoise','sDrift','sBlur'].forEach(id=>$(id).addEventListener('input',compute));
+$('cbErr').addEventListener('change',compute);
+compute();
+})();
+</script>
+</body>
+</html>

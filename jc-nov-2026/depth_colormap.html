@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<title>Depth as Colour</title>
+<style>
+:root{color-scheme:light only;--fg:#1d2433;--muted:#566070;--accent:#2e7d32;--line:#d7dde6;--panel:#f5f7f9;}
+html,body{background:#ffffff;color:var(--fg);margin:0}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:18px;line-height:1.45;padding:24px 16px}
+main{max-width:1180px;margin:0 auto}
+h1{font-size:1.75rem;margin:0 0 .25rem;color:var(--accent)}
+h2{font-size:1.05rem;margin:0 0 .5rem}
+.lead{color:var(--muted);margin:0 0 1rem;max-width:85ch}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+canvas{display:block;width:100%;height:auto;border-radius:6px;background:#fff}
+#scene{cursor:crosshair;image-rendering:pixelated;touch-action:none}
+label{display:block;font-weight:600;font-size:.95rem;margin:.6rem 0 .1rem}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.val{font-weight:400;color:var(--muted)}
+.chain{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:10px 0;font-size:1rem}
+.chain .arr{color:var(--muted)}
+.chain b{color:var(--accent)}
+.sw{display:inline-block;width:26px;height:26px;border-radius:5px;border:1px solid rgba(0,0,0,.3);vertical-align:middle}
+.formula{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85rem;background:#fff;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:6px;padding:8px 10px;margin-top:10px}
+.read{background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px;font-size:.95rem;min-height:4.6em}
+.read .err{font-weight:700}
+.note{font-size:.82rem;color:var(--muted);margin:.6rem 0 0}
+footer{margin-top:18px;color:var(--muted);font-size:.8rem}
+@media (max-width:860px){.layout{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>Depth painted as colour, and read back as metres</h1>
+<p class="lead">For depth, the model outputs a false-colour image. Each distance corresponds to exactly <b>one</b> colour on a path through the colour cube, so the colour can be converted back into metres. Nearby distances get more of the colour range, because precision matters most up close.</p>
+<div class="layout">
+  <div class="panel">
+    <h2>1. From distance to colour</h2>
+    <label for="sD">Distance: <span class="val" id="vD"></span></label>
+    <input id="sD" type="range" min="0" max="1000" value="566">
+    <div class="chain" id="chain"></div>
+    <canvas id="bar" width="700" height="96"></canvas>
+    <canvas id="cube" width="520" height="330" style="margin-top:10px"></canvas>
+    <div class="formula">curved distance f(d) = 1 &minus; (1 + d / 10 m)<sup>&minus;2</sup> &nbsp; (power transform, &lambda; = &minus;3, c = 10/3)<br>then f is walked along the cube's edges from black (0 m) to white (&infin;)</div>
+    <p class="note">The order of colours along the cube path is an illustrative reconstruction; the paper describes a path along the edges of the RGB cube from black to white.</p>
+  </div>
+  <div class="panel">
+    <h2>2. A generated depth image, decoded</h2>
+    <canvas id="scene" width="320" height="200"></canvas>
+    <label for="sN">Generation noise in the colours: <span class="val" id="vN"></span></label>
+    <input id="sN" type="range" min="0" max="30" value="0">
+    <div class="read" id="read">Hover over the depth image to read off distances.</div>
+    <p class="note">Toy scene: road, a person at 5.5 m, a car at 9 m, a pole at 3.5 m, a building at 30 m, sky at infinity. Try adding noise: errors stay small up close and grow with distance, because far distances share a small part of the colour path.</p>
+  </div>
+</div>
+<footer>Illustration for Journal Club WS26 · Gabeur et al., "Image Generators are Generalist Vision Learners", arXiv:2604.20329 · toy data, not model output</footer>
+</main>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const V=[[0,0,0],[0,0,1],[0,1,1],[0,1,0],[1,1,0],[1,0,0],[1,0,1],[1,1,1]];
+const NAMES=['black','blue','cyan','green','yellow','red','magenta','white'];
+function curve(d){return d===Infinity?1:1-Math.pow(1+d/10,-2);}
+function uncurve(f){f=Math.min(Math.max(f,0),0.999999);return 10*(Math.pow(1-f,-0.5)-1);}
+function f2rgb(f){const t=Math.max(0,Math.min(1,f))*7;const s=Math.min(6,Math.floor(t)),u=t-s;const a=V[s],b=V[s+1];return [0,1,2].map(k=>a[k]+(b[k]-a[k])*u);}
+function rgb2f(p){let bs=0,bd=Infinity,bu=0;for(let s=0;s<7;s++){const a=V[s],b=V[s+1];let dot=0;for(let k=0;k<3;k++)dot+=(p[k]-a[k])*(b[k]-a[k]);const u=Math.max(0,Math.min(1,dot));let d=0;for(let k=0;k<3;k++){const q=a[k]+(b[k]-a[k])*u;d+=(p[k]-q)*(p[k]-q);}if(d<bd){bd=d;bs=s;bu=u;}}return (bs+bu)/7;}
+function to255(c){return c.map(v=>Math.round(v*255));}
+function css(c){return 'rgb('+c.join(',')+')';}
+function fmtD(d){if(!isFinite(d)||d>1000)return '&gt; 1000 m';return d<10?d.toFixed(2)+' m':d.toFixed(1)+' m';}
+
+/* colour bar */
+const bar=$('bar'),bctx=bar.getContext('2d'),BW=bar.width,BX=20,BL=BW-40;
+function drawBar(f){
+  bctx.clearRect(0,0,BW,bar.height);
+  for(let x=0;x<BL;x++){bctx.fillStyle=css(to255(f2rgb(x/(BL-1))));bctx.fillRect(BX+x,18,1,34);}
+  bctx.strokeStyle='#9aa3b2';bctx.strokeRect(BX-.5,17.5,BL+1,35);
+  bctx.fillStyle='#566070';bctx.font='14px system-ui,sans-serif';bctx.textAlign='center';
+  [[0,'0'],[1,'1'],[2,'2'],[3,'3'],[5,'5'],[10,'10'],[20,'20'],[30,'30 m'],[Infinity,'∞']].forEach(([d,l])=>{const x=BX+curve(d)*(BL-1);bctx.fillRect(x-.5,52,1,7);bctx.fillText(l,x,76);});
+  const x=BX+f*(BL-1);bctx.fillStyle='#111';bctx.beginPath();bctx.moveTo(x,16);bctx.lineTo(x-8,2);bctx.lineTo(x+8,2);bctx.closePath();bctx.fill();
+  bctx.fillRect(x-1,18,2,34);
+  bctx.textAlign='left';bctx.fillStyle='#566070';bctx.fillText('metres',BX,94);
+}
+
+/* cube */
+const cube=$('cube'),cctx=cube.getContext('2d'),S=190,OX=110,OY=300;
+function P(p){return [OX+p[0]*S+p[2]*S*0.55,OY-p[1]*S-p[2]*S*0.42];}
+function drawCube(f){
+  cctx.clearRect(0,0,cube.width,cube.height);
+  cctx.setLineDash([5,5]);cctx.strokeStyle='#b8c0cc';cctx.lineWidth=1.2;
+  for(let i=0;i<8;i++)for(let j=i+1;j<8;j++){const a=[i>>2&1,i>>1&1,i&1],b=[j>>2&1,j>>1&1,j&1];let diff=0;for(let k=0;k<3;k++)diff+=a[k]!==b[k];if(diff!==1)continue;const pa=P(a),pb=P(b);cctx.beginPath();cctx.moveTo(pa[0],pa[1]);cctx.lineTo(pb[0],pb[1]);cctx.stroke();}
+  cctx.setLineDash([]);cctx.lineCap='round';
+  const STEPS=40;
+  cctx.lineWidth=11;cctx.strokeStyle='#5f6672';
+  cctx.beginPath();for(let s=0;s<7;s++){const a=P(V[s]),b=P(V[s+1]);if(s===0)cctx.moveTo(a[0],a[1]);cctx.lineTo(b[0],b[1]);}cctx.stroke();
+  cctx.lineWidth=8;
+  for(let s=0;s<7;s++)for(let q=0;q<STEPS;q++){const u0=q/STEPS,u1=(q+1)/STEPS;const c0=V[s].map((v,k)=>v+(V[s+1][k]-v)*u0),c1=V[s].map((v,k)=>v+(V[s+1][k]-v)*u1);const p0=P(c0),p1=P(c1);cctx.strokeStyle=css(to255(c0.map((v,k)=>(v+c1[k])/2)));cctx.beginPath();cctx.moveTo(p0[0],p0[1]);cctx.lineTo(p1[0],p1[1]);cctx.stroke();}
+  cctx.font='13px system-ui,sans-serif';cctx.fillStyle='#1d2433';
+  const LO=[[12,18,'left'],[12,18,'left'],[0,-14,'center'],[-12,5,'right'],[14,-10,'left'],[0,22,'center'],[14,5,'left'],[14,5,'left']];V.forEach((v,i)=>{const p=P(v),o=LO[i];cctx.textAlign=o[2];cctx.fillText(NAMES[i]+(i===0?' (0 m)':i===7?' (∞)':''),p[0]+o[0],p[1]+o[1]);});
+  const c=f2rgb(f),p=P(c);
+  cctx.beginPath();cctx.arc(p[0],p[1],11,0,Math.PI*2);cctx.fillStyle=css(to255(c));cctx.fill();cctx.lineWidth=3;cctx.strokeStyle='#111';cctx.stroke();
+  cctx.beginPath();cctx.arc(p[0],p[1],15,0,Math.PI*2);cctx.lineWidth=2;cctx.strokeStyle='#fff';cctx.stroke();
+}
+
+function updateSlider(){
+  const s=+$('sD').value,d=0.1*Math.pow(10,3*s/1000),f=curve(d),c=to255(f2rgb(f)),back=uncurve(rgb2f(c.map(v=>v/255)));
+  $('vD').textContent=fmtD(d);
+  $('chain').innerHTML='<span><b>'+fmtD(d)+'</b></span><span class="arr">&rarr;</span><span>f = '+f.toFixed(3)+'</span><span class="arr">&rarr;</span><span class="sw" style="background:'+css(c)+'"></span><span>&lt;'+c.join(', ')+'&gt;</span><span class="arr">&rarr; decode &rarr;</span><span><b>'+fmtD(back)+'</b></span>';
+  drawBar(f);drawCube(f);
+}
+
+/* scene */
+const W=320,H=200,Y0=80,FOC=200,CAM=1.6;
+function boxRows(dist,h){return [Y0-(h-CAM)*FOC/dist,Y0+CAM*FOC/dist];}
+const OBJ=[
+  {x0:250,x1:320,d:30,h:12},
+  {x0:170,x1:245,d:9,h:1.5},
+  {x0:108,x1:128,d:5.5,h:1.8},
+  {x0:40,x1:56,d:3.5,h:4.5}
+];
+function trueDepth(x,y){
+  let d=Infinity;
+  if(y>Y0)d=CAM*FOC/(y-Y0);
+  for(const o of OBJ){const r=boxRows(o.d,o.h);if(x>=o.x0&&x<=o.x1&&y>=r[0]&&y<=r[1])d=Math.min(d,o.d);}
+  return d;
+}
+const depth=new Float64Array(W*H);
+for(let y=0;y<H;y++)for(let x=0;x<W;x++)depth[y*W+x]=trueDepth(x+.5,y+.5);
+const scene=$('scene'),sctx=scene.getContext('2d'),img=new ImageData(W,H),gen=new Uint8ClampedArray(W*H*3);
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+let hover=null;
+function genScene(){
+  const sig=+$('sN').value;$('vN').textContent=sig===0?'(none)':'(σ = '+sig+' of 255)';
+  const rng=mulberry32(7);
+  for(let i=0;i<W*H;i++){
+    const c=f2rgb(curve(depth[i]));
+    for(let k=0;k<3;k++){let n=0;if(sig>0){let u=0;while(u===0)u=rng();n=Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*rng())*sig;}gen[i*3+k]=Math.round(c[k]*255+n);}
+    const j=i*4;img.data[j]=gen[i*3];img.data[j+1]=gen[i*3+1];img.data[j+2]=gen[i*3+2];img.data[j+3]=255;
+  }
+  drawScene();
+}
+function drawScene(){
+  sctx.putImageData(img,0,0);
+  if(hover){sctx.lineWidth=2;sctx.strokeStyle='#000';sctx.strokeRect(hover.x-4.5,hover.y-4.5,10,10);sctx.lineWidth=1;sctx.strokeStyle='#fff';sctx.strokeRect(hover.x-6.5,hover.y-6.5,14,14);}
+  updateRead();
+}
+function updateRead(){
+  if(!hover)return;
+  const i=hover.y*W+hover.x,c=[gen[i*3],gen[i*3+1],gen[i*3+2]],t=depth[i],d=uncurve(rgb2f(c.map(v=>v/255)));
+  let h='Colour <span class="sw" style="width:20px;height:20px;background:'+css(c)+'"></span> &lt;'+c.join(', ')+'&gt;<br>';
+  h+='Decoded: <b>'+fmtD(d)+'</b> &nbsp;&middot;&nbsp; True: <b>'+(isFinite(t)?fmtD(t):'sky (infinitely far)')+'</b>';
+  if(isFinite(t)){const e=Math.abs(d-t);h+='<br>Error: <span class="err">'+(e<10?e.toFixed(2):e.toFixed(1))+' m ('+(100*e/t).toFixed(1)+' %)</span>';}
+  $('read').innerHTML=h;
+}
+function onMove(e){const r=scene.getBoundingClientRect();const x=Math.floor((e.clientX-r.left)/r.width*W),y=Math.floor((e.clientY-r.top)/r.height*H);if(x<0||y<0||x>=W||y>=H)return;hover={x,y};drawScene();}
+scene.addEventListener('pointermove',onMove);scene.addEventListener('pointerdown',onMove);
+$('sD').addEventListener('input',updateSlider);
+$('sN').addEventListener('input',genScene);
+updateSlider();
+hover={x:205,y:100};
+genScene();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<title>Ambiguous Masks</title>
+<style>
+:root{color-scheme:light only;--fg:#1d2433;--muted:#566070;--accent:#2e7d32;--line:#d7dde6;--panel:#f5f7f9;}
+html,body{background:#ffffff;color:var(--fg);margin:0}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:18px;line-height:1.45;padding:24px 16px}
+main{max-width:1180px;margin:0 auto}
+h1{font-size:1.75rem;margin:0 0 .25rem;color:var(--accent)}
+h2{font-size:1.05rem;margin:0 0 .5rem}
+.lead{color:var(--muted);margin:0 0 1rem;max-width:85ch}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+canvas{display:block;width:100%;height:auto;border-radius:6px;background:#fff}
+#main{cursor:crosshair;touch-action:none}
+.modes{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.modes button,.act{font:inherit;font-size:.95rem;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--fg);cursor:pointer}
+.modes button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.act{background:#fff;border-color:var(--accent);color:var(--accent);font-weight:600}
+.act:disabled{opacity:.4;cursor:default}
+.thumbs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:6px}
+.thumb{background:#fff;border:2px solid var(--line);border-radius:8px;padding:6px;text-align:center;font-size:.9rem}
+.thumb.pick{border-color:var(--accent);box-shadow:0 0 0 2px #c8e6c9}
+.thumb .nm{font-weight:700}.thumb .sc{color:var(--muted)}
+.explain{background:#fff;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:6px;padding:10px 12px;margin-top:12px;font-size:.95rem}
+.status{font-size:.95rem;margin:.5rem 0 0;color:var(--muted)}
+footer{margin-top:18px;color:var(--muted);font-size:.8rem}
+@media (max-width:860px){.layout{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<h1>One click, several correct answers</h1>
+<p class="lead">Click on the person. Did you mean the <b>logo</b>, the <b>shirt</b>, or the <b>whole person</b>? All are valid masks. Compare how three kinds of model deal with this ambiguity.</p>
+<div class="layout">
+  <div class="panel">
+    <div class="modes" id="modes">
+      <button data-m="avg" class="on">Standard model: average</button>
+      <button data-m="sam">SAM-style: several masks</button>
+      <button data-m="gen">Generative: commit to one</button>
+    </div>
+    <canvas id="main" width="360" height="300"></canvas>
+    <p class="status" id="status"></p>
+  </div>
+  <div class="panel">
+    <h2>Valid answers for this click</h2>
+    <div class="thumbs" id="thumbs"></div>
+    <div style="margin-top:12px"><button class="act" id="resample">Sample again</button></div>
+    <div class="explain" id="explain"></div>
+  </div>
+</div>
+<footer>Illustration for Journal Club WS26 · Gabeur et al., "Image Generators are Generalist Vision Learners", arXiv:2604.20329 · conceptual toy example, not model output</footer>
+</main>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const W=360,H=300,N=W*H;
+function inC(x,y,cx,cy,r){const dx=x-cx,dy=y-cy;return dx*dx+dy*dy<=r*r;}
+function inR(x,y,x0,x1,y0,y1){return x>=x0&&x<=x1&&y>=y0&&y<=y1;}
+const shapes={
+  logo:(x,y)=>inC(x,y,180,136,15),
+  shirt:(x,y)=>inR(x,y,138,222,98,190)||inR(x,y,112,138,104,176)||inR(x,y,222,248,104,176)||inC(x,y,138,110,12)||inC(x,y,222,110,12),
+  head:(x,y)=>inC(x,y,180,62,26)||inR(x,y,172,188,84,100),
+  hands:(x,y)=>inC(x,y,125,184,10)||inC(x,y,235,184,10),
+  trousers:(x,y)=>inR(x,y,142,218,190,262)&&!inR(x,y,177,183,212,262),
+  shoes:(x,y)=>inR(x,y,138,176,262,274)||inR(x,y,184,222,262,274)
+};
+function build(fn){const m=new Uint8Array(N);for(let y=0;y<H;y++)for(let x=0;x<W;x++)m[y*W+x]=fn(x+.5,y+.5)?1:0;return m;}
+const M={};for(const k in shapes)M[k]=build(shapes[k]);
+const person=new Uint8Array(N);for(let i=0;i<N;i++)person[i]=M.shirt[i]|M.head[i]|M.hands[i]|M.trousers[i]|M.shoes[i];
+const PARTS=[
+  {name:'logo',m:M.logo},
+  {name:'shirt',m:M.shirt},
+  {name:'head',m:M.head},
+  {name:'trousers',m:M.trousers},
+  {name:'whole person',m:person}
+];
+PARTS.forEach(p=>{p.area=p.m.reduce((a,b)=>a+b,0);});
+
+const photo=new ImageData(W,H);
+function hash(x,y){let h=(Math.imul(x,374761393)+Math.imul(y,668265263))|0;h=Math.imul(h^(h>>>13),1274126177);h^=h>>>16;return (h>>>0)/4294967296;}
+for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+  const i=y*W+x,X=x+.5,Y=y+.5,n=hash(x,y)*2-1;let c;
+  if(M.logo[i])c=[250,200,40];
+  else if(M.shirt[i])c=[52,120,190];
+  else if(M.head[i])c=(Y<58&&inC(X,Y,180,62,26)&&!(Y>44&&Math.abs(X-180)<16))?[70,48,34]:[233,190,160];
+  else if(M.hands[i])c=[233,190,160];
+  else if(M.trousers[i])c=[60,62,78];
+  else if(M.shoes[i])c=[32,32,36];
+  else if(Y>255)c=[205,195,180];
+  else c=[232,236,240];
+  if(M.head[i]&&(inC(X,Y,171,64,2.5)||inC(X,Y,189,64,2.5)))c=[40,40,40];
+  const j=i*4;photo.data[j]=c[0]+6*n;photo.data[j+1]=c[1]+6*n;photo.data[j+2]=c[2]+6*n;photo.data[j+3]=255;
+}
+
+function blur(src,passes){let a=Float32Array.from(src);for(let p=0;p<passes;p++){const b=new Float32Array(N);for(let y=0;y<H;y++)for(let x=0;x<W;x++){let s=0,n=0;for(let dy=-2;dy<=2;dy++){const yy=y+dy;if(yy<0||yy>=H)continue;for(let dx=-2;dx<=2;dx++){const xx=x+dx;if(xx<0||xx>=W)continue;s+=a[yy*W+xx];n++;}}b[y*W+x]=s/n;}a=b;}return a;}
+
+const WEIGHTS={1:[1],2:[0.55,0.45],3:[0.25,0.4,0.35]};
+const OUTLINE=[[230,57,70],[255,152,0],[123,31,162]];
+let mode='avg',click={x:180,y:136},cands=[],weights=[],sampleIdx=0,avgMap=null;
+
+function setClick(x,y){
+  click={x,y};const i=y*W+x;
+  cands=PARTS.filter(p=>p.m[i]).sort((a,b)=>a.area-b.area).slice(0,3);
+  weights=cands.length?WEIGHTS[cands.length]:[];
+  avgMap=null;
+  if(cands.length){
+    const s=new Float32Array(N);
+    cands.forEach((p,k)=>{for(let j=0;j<N;j++)s[j]+=p.m[j]*weights[k];});
+    avgMap=blur(s,3);
+  }
+  sample();
+}
+function sample(){if(!cands.length)return;let r=Math.random(),acc=0;sampleIdx=cands.length-1;for(let k=0;k<cands.length;k++){acc+=weights[k];if(r<acc){sampleIdx=k;break;}}render();}
+
+function baseImage(dim){const img=new ImageData(W,H);for(let j=0;j<N*4;j+=4){for(let k=0;k<3;k++)img.data[j+k]=dim?photo.data[j+k]*0.55+255*0.45:photo.data[j+k];img.data[j+3]=255;}return img;}
+function overlayMask(img,m,col,alpha){for(let i=0;i<N;i++){const a=alpha*m[i];if(a<=0)continue;const j=i*4;for(let k=0;k<3;k++)img.data[j+k]=img.data[j+k]*(1-a)+col[k]*a;}}
+function outline(img,m,col,w){for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;if(!m[i])continue;let edge=false;for(let d=1;d<=w&&!edge;d++){if(x-d<0||!m[i-d]||x+d>=W||!m[i+d]||y-d<0||!m[i-d*W]||y+d>=H||!m[i+d*W])edge=true;}if(edge){const j=i*4;img.data[j]=col[0];img.data[j+1]=col[1];img.data[j+2]=col[2];}}}
+function drawClick(ctx,sx){ctx.save();ctx.scale(sx,sx);ctx.beginPath();ctx.arc(click.x,click.y,7,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();ctx.lineWidth=3;ctx.strokeStyle='#111';ctx.stroke();ctx.beginPath();ctx.arc(click.x,click.y,2.5,0,Math.PI*2);ctx.fillStyle='#111';ctx.fill();ctx.restore();}
+
+const mainCtx=$('main').getContext('2d');
+function render(){
+  const status=$('status');let img;
+  if(!cands.length){
+    img=baseImage(false);mainCtx.putImageData(img,0,0);drawClick(mainCtx,1);
+    status.textContent='That is background. Click somewhere on the person.';
+    $('thumbs').innerHTML='';$('explain').innerHTML='No object here, so there is nothing to segment.';$('resample').disabled=true;return;
+  }
+  if(mode==='avg'){
+    img=baseImage(true);
+    const col=[230,57,70];for(let i=0;i<N;i++){const a=Math.min(1,avgMap[i])*0.9;if(a<=0.003)continue;const j=i*4;for(let k=0;k<3;k++)img.data[j+k]=img.data[j+k]*(1-a)+col[k]*a;}
+    status.textContent='Output: one soft probability map (strong red = confident).';
+  }else if(mode==='sam'){
+    img=baseImage(true);
+    cands.forEach((p,k)=>outline(img,p.m,OUTLINE[k],2));
+    status.textContent='Output: '+cands.length+' separate masks, each with a confidence score.';
+  }else{
+    img=baseImage(true);overlayMask(img,cands[sampleIdx].m,[230,57,70],0.85);outline(img,cands[sampleIdx].m,[140,20,30],1);
+    status.textContent='Output: one crisp mask — this time: "'+cands[sampleIdx].name+'".';
+  }
+  mainCtx.putImageData(img,0,0);drawClick(mainCtx,1);
+  renderThumbs();renderExplain();
+  $('resample').disabled=(mode!=='gen'||cands.length<2);
+}
+function renderThumbs(){
+  const box=$('thumbs');box.innerHTML='';
+  cands.forEach((p,k)=>{
+    const d=document.createElement('div');d.className='thumb'+((mode==='gen'&&k===sampleIdx)?' pick':'');
+    const c=document.createElement('canvas');c.width=W;c.height=H;const ctx=c.getContext('2d');
+    const img=baseImage(true);const col=mode==='sam'?OUTLINE[k]:[230,57,70];overlayMask(img,p.m,col,0.85);ctx.putImageData(img,0,0);drawClick(ctx,1);
+    d.appendChild(c);
+    const nm=document.createElement('div');nm.className='nm';nm.textContent=p.name;
+    if(mode==='sam')nm.style.color='rgb('+OUTLINE[k].join(',')+')';
+    d.appendChild(nm);
+    const sc=document.createElement('div');sc.className='sc';
+    sc.textContent=mode==='sam'?'score '+weights[k].toFixed(2):(mode==='gen'?'chance '+Math.round(weights[k]*100)+' %':'also correct');
+    d.appendChild(sc);box.appendChild(d);
+  });
+}
+function renderExplain(){
+  const e=$('explain');
+  if(mode==='avg')e.innerHTML='<b>Standard (discriminative) model.</b> It is trained to give one answer, but the training data contains all of these answers for similar clicks. The loss is minimised by <b>hedging</b>: confident where the answers agree, faint and blurry where they disagree. The result is none of the valid masks.';
+  else if(mode==='sam')e.innerHTML='<b>Segment Anything (SAM).</b> A hand-designed workaround: the model outputs <b>several masks at once</b> (roughly part, sub-part, whole), and during training the loss is applied only to the one closest to the ground truth. Each output can specialise in one interpretation. It works, but it is special architecture and a special loss.';
+  else e.innerHTML='<b>Generative model (Vision Banana).</b> It learns the whole distribution of possible answers and <b>samples one coherent mask</b>, never a mix. Ask again and you may get a different, equally valid answer. No special machinery is needed, but it commits confidently, possibly to the answer you did not mean, and gives no explicit confidence score.<br><br><i>In interactive segmentation, a second click or a scribble is how the user tells the model which answer they meant.</i>';
+}
+$('modes').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;mode=b.dataset.m;document.querySelectorAll('#modes button').forEach(x=>x.classList.toggle('on',x===b));render();});
+$('resample').addEventListener('click',()=>{if(cands.length<2)return;const prev=sampleIdx;let tries=0;do{sample();tries++;}while(sampleIdx===prev&&tries<20);});
+$('main').addEventListener('pointerdown',e=>{const r=e.currentTarget.getBoundingClientRect();const x=Math.floor((e.clientX-r.left)/r.width*W),y=Math.floor((e.clientY-r.top)/r.height*H);if(x<0||y<0||x>=W||y>=H)return;setClick(x,y);});
+setClick(180,136);
+})();
+</script>
+</body>
+</html>
