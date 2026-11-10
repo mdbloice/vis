@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Confusion Matrix — Precision and Recall</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#252B29;background:#FFFFFF}*{box-sizing:border-box}body{margin:0;padding:12px}.panel{max-width:780px;margin:0;padding:0;background:transparent;border:0;border-radius:0;box-shadow:none}h1{font-size:1.45rem;color:#163D28;margin:0 0 8px}.muted{color:#68766C;font-size:.9rem}.selectors{display:flex;gap:18px;flex-wrap:wrap;margin:20px 0}label{cursor:pointer}input{accent-color:#007C3C}.axis{text-align:center;margin:10px 0;color:#68766C;font-size:.85rem}.matrix{display:grid;grid-template-columns:110px repeat(3,minmax(0,1fr));gap:4px}.head,.rowlabel{display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:600;text-align:center;min-width:0}.cell{display:flex;align-items:center;justify-content:center;border-radius:5px;background:#EDF1ED;min-height:75px;font-size:1.2rem;font-weight:600;transition:background .2s}.tp{background:#187744;color:white}.fn{background:#B75C40;color:white}.fp{background:#B68B35;color:white}.legend{display:flex;flex-wrap:wrap;gap:16px;margin:20px 0}.legend span{display:flex;align-items:center;gap:6px;font-size:.8rem}.swatch{width:12px;height:12px;border-radius:2px}.results{display:grid;grid-template-columns:1fr 1fr;gap:16px;border-top:1px solid #DDE7DF;padding-top:20px}.metric{background:transparent;border-radius:0;padding:0}.metric h2{font-size:.95rem;margin:0 0 6px}.value{font-size:2rem;font-weight:700;color:#163D28}.formula{font-family:ui-monospace,monospace;margin:8px 0}.explain{font-size:.85rem;color:#68766C;line-height:1.5}@media(max-width:480px){.panel{padding:0}.matrix{grid-template-columns:75px repeat(3,minmax(0,1fr))}.head,.rowlabel{font-size:.69rem}.cell{min-height:55px}.results{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="panel">
+<h1>Confusion Matrix</h1>
+<p class="muted">Select a disease to see how its precision and recall are calculated. Rows are actual diagnoses; columns are predicted diagnoses.</p>
+<div class="selectors" id="selectors" role="radiogroup" aria-label="Disease"></div>
+<div class="axis">Predicted diagnosis →</div>
+<div class="matrix" id="matrix" aria-label="Confusion matrix"></div>
+<div class="legend"><span><i class="swatch" style="background:#187744"></i>True positives</span><span><i class="swatch" style="background:#B75C40"></i>False negatives</span><span><i class="swatch" style="background:#B68B35"></i>False positives</span></div>
+<div class="results"><section class="metric"><h2>Precision</h2><div class="value" id="precision"></div><div class="formula" id="precisionFormula"></div><p class="explain" id="precisionExplain"></p></section><section class="metric"><h2>Recall</h2><div class="value" id="recall"></div><div class="formula" id="recallFormula"></div><p class="explain" id="recallExplain"></p></section></div>
+</main>
+<script>
+// Edit the labels and counts below to use your own dataset.
+const diseases=['Psoriasis','Eczema','Acne'];
+const counts=[[40,8,2],[10,30,10],[3,7,40]];
+let selected=0;
+const $=id=>document.getElementById(id);
+function render(){
+ $('selectors').replaceChildren(...diseases.map((name,i)=>{const label=document.createElement('label');const input=document.createElement('input');input.type='radio';input.name='disease';input.checked=i===selected;input.addEventListener('change',()=>{selected=i;render()});label.append(input,' '+name);return label}));
+ const matrix=$('matrix');matrix.replaceChildren();
+ const add=(text,cls)=>{const d=document.createElement('div');d.className=cls;d.textContent=text;matrix.append(d)};
+ add('Actual ↓','head');diseases.forEach(name=>add(name,'head'));
+ counts.forEach((row,i)=>{add(diseases[i],'rowlabel');row.forEach((n,j)=>add(n,'cell '+(i===selected&&j===selected?'tp':i===selected?'fn':j===selected?'fp':'')))});
+ const tp=counts[selected][selected];
+ const fn=counts[selected].reduce((sum,n)=>sum+n,0)-tp;
+ const fp=counts.reduce((sum,row)=>sum+row[selected],0)-tp;
+ const p=tp+fp?tp/(tp+fp):NaN;
+ const r=tp+fn?tp/(tp+fn):NaN;
+ $('precision').textContent=Number.isNaN(p)?'Undefined':(p*100).toFixed(1)+'%';
+ $('recall').textContent=Number.isNaN(r)?'Undefined':(r*100).toFixed(1)+'%';
+ $('precisionFormula').textContent=`${tp} / (${tp} + ${fp})`;
+ $('recallFormula').textContent=`${tp} / (${tp} + ${fn})`;
+ $('precisionExplain').textContent=`Of all cases predicted as ${diseases[selected].toLowerCase()}, how many were correct?`;
+ $('recallExplain').textContent=`Of all actual ${diseases[selected].toLowerCase()} cases, how many were detected?`;
+}
+render();
+</script>
+</body>
+</html>

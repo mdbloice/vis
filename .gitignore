@@ -1,0 +1,14 @@
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Editor settings
+.vscode/
+.idea/
+
+# If you ever use npm for build tools
+node_modules/
+
+# Local notes or drafts you don't want public
+drafts/
+*.local.html
